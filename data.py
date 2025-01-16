@@ -9,7 +9,7 @@ def load_csv(filename):
     return lines
 
 def load_adult_data():
-    return load_csv("adult.data")
+    return load_csv("adult.csv")
 
 #TODO: Possibly use different data for training and validation
 def load_adult_train_data():
