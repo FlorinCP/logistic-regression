@@ -9,7 +9,6 @@ def run_comparison():
     train_data = extract_features(load_adult_train_data())
     valid_data = extract_features(load_adult_valid_data())
 
-    print("\nRunning simple SGD...")
     start_time = time.time()
     simple_model = submission(train_data)
     simple_time = time.time() - start_time
@@ -17,7 +16,6 @@ def run_comparison():
     simple_train_acc = accuracy(train_data, [predict(simple_model, p) for p in train_data])
     simple_valid_acc = accuracy(valid_data, [predict(simple_model, p) for p in valid_data])
 
-    # Run distributed SGD with different worker counts
     worker_counts = [1, 2, 4, 8]
     distributed_times = []
     distributed_train_accs = []
