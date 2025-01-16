@@ -34,6 +34,16 @@ class SGDTest(unittest.TestCase):
         predictions = [predict(model, p) for p in valid_data]
         print( "Validation Accuracy:", accuracy(valid_data, predictions))
 
+    def test_data_distribution(self):
+        data = extract_features(load_adult_train_data())
+        total = len(data)
+        less_than_50k = sum(1 for point in data if not point['label'])
+        more_than_50k = total - less_than_50k
+
+        print(f"Total examples: {total}")
+        print(f"≤50K: {less_than_50k} ({less_than_50k / total * 100:.16f}%)")
+        print(f">50K: {more_than_50k} ({more_than_50k / total * 100:.16f}%)")
+
 
 if __name__ == '__main__':
     unittest.main()
