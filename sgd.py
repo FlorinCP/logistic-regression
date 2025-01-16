@@ -1,53 +1,125 @@
 from math import exp
 import random
 
-# TODO: Calculate logistic
 def logistic(x):
-    return 1.
+    """Compute sigmoid function safely."""
+    if x < -30:
+        return 0
+    elif x > 30:
+        return 1
+    return 1.0 / (1.0 + exp(-x))
 
-# TODO: Calculate dot product of two lists
+
 def dot(x, y):
-    s = 0
-    return s
+    return sum(float(xi) * float(yi) for xi, yi in zip(x, y))
 
-# TODO: Calculate prediction based on model
+
 def predict(model, point):
-    return 0
+    return logistic(dot(model, point['features']))
 
-# TODO: Calculate accuracy of predictions on data
+
 def accuracy(data, predictions):
     correct = 0
-    return float(correct)/len(data)
+    for point, pred in zip(data, predictions):
+        if (pred >= 0.5) == point['label']:
+            correct += 1
+    return float(correct) / len(data)
 
-# TODO: Update model using learning rate and L2 regularization
-def update(model, point, delta, rate, lam):
-    pass
+
+def compute_gradient(point, prediction):
+    """
+    Compute gradient for logistic regression.
+    Returns gradient vector same length as features.
+    """
+    error = prediction - (1.0 if point['label'] else 0.0)
+    gradient = []
+    for feature in point['features']:
+        grad_component = error * feature
+        gradient.append(grad_component)
+    return gradient
+
+
+def update(model, point, learning_rate, reg_lambda):
+    """
+    Update model weights using computed gradient.
+    Includes L2 regularization.
+    """
+    prediction = predict(model, point)
+    gradient = compute_gradient(point, prediction)
+
+    # Update each weight using gradient and regularization
+    for j in range(len(model)):
+        reg_term = reg_lambda * model[j]
+        model[j] -= learning_rate * (gradient[j] + reg_term)
+
+
+def train(data, epochs, learning_rate, reg_lambda):
+    model = initialize_model(len(data[0]['features']))
+    print("\nInitial model weights:", [f"{w:.4f}" for w in model])
+
+    best_accuracy = 0
+    best_model = None
+
+    for epoch in range(epochs):
+        random.shuffle(data)
+        epoch_loss = 0
+
+        for i, point in enumerate(data):
+            if i % 5000 == 0:
+                print(f"Processing point {i}/{len(data)}")
+
+            update(model, point, learning_rate, reg_lambda)
+
+            prediction = predict(model, point)
+            error = prediction - (1.0 if point['label'] else 0.0)
+            epoch_loss += error * error
+
+        predictions = [predict(model, p) for p in data]
+        current_accuracy = accuracy(data, predictions)
+
+        if current_accuracy > best_accuracy:
+            best_accuracy = current_accuracy
+            best_model = model.copy()
+
+        print(f"Epoch {epoch + 1}/{epochs}")
+        print(f"Loss: {epoch_loss / len(data):.4f}")
+        print(f"Accuracy: {current_accuracy:.4f}")
+        print(f"Best Accuracy so far: {best_accuracy:.4f}")
+        print()
+
+    return best_model if best_model is not None else model
+
 
 def initialize_model(k):
-    return [random.gauss(0, 1) for x in range(k)]
+    """
+    [-0.1, 0.1] random initialization for weights in order to compensate for large number of features.
+    """
+    return [random.uniform(-0.1, 0.1) for _ in range(k)]
 
-# TODO: Train model using training data
-def train(data, epochs, rate, lam):
-    model = initialize_model(len(data[0]['features']))
-    return model
-        
+
 def extract_features(raw):
+    """Convert raw data into numerical features."""
     data = []
     for r in raw:
         point = {}
-        point["label"] = (r['income'] == '>50K')
+        point["label"] = (r['income'].strip() == '>50K')
 
-        features = []
-        features.append(1.)
-        features.append(float(r['age'])/100)
-        features.append(float(r['education_num'])/20)
-        features.append(r['marital'] == 'Married-civ-spouse')
-        #TODO: Add more feature extraction rules here!
+        features = [
+            1.0,  # bias term
+            float(r['age']) / 100.0,
+            float(r['education_num']) / 16.0,
+            float(r['hr_per_week']) / 100.0,
+            1.0 if r['marital'] == 'Married-civ-spouse' else 0.0,
+            1.0 if r['sex'] == 'Male' else 0.0,
+            float(r['capital_gain']) / 10000.0 if float(r['capital_gain']) > 0 else 0.0,
+            float(r['capital_loss']) / 10000.0 if float(r['capital_loss']) > 0 else 0.0
+        ]
+
         point['features'] = features
         data.append(point)
+
     return data
 
-# TODO: Tune your parameters for final submission
+
 def submission(data):
-    return train(data, 1, .01, 0)
-    
+    return train(data, epochs=20, learning_rate=0.001, reg_lambda=0.001)
