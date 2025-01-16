@@ -1,91 +1,111 @@
 import lithops
 import random
 from typing import List, Dict, Any
-from sgd import initialize_model, logistic, dot, predict,compute_gradient
+import time
+from sgd import predict, initialize_model, compute_gradient
 
+def process_batch(data: Dict) -> List[float]:
 
-class DistributedSGD:
-    def __init__(self, num_workers: int = 4):
-        self.fexec = lithops.FunctionExecutor()
-        self.num_workers = num_workers
+    try:
+        model = data['model'].copy()
+        learning_rate = data['learning_rate']
+        reg_lambda = data['reg_lambda']
+        batch = data['batch']
 
-    def _initialize_model(self, k: int) -> List[float]:
-        return initialize_model(k)
+        print(f"Worker processing batch size: {len(batch)}")
 
-    def _logistic(self, x: float) -> float:
-        return logistic(x)
+        for i, point in enumerate(batch):
 
-    def _dot(self, x: List[float], y: List[float]) -> float:
-        return dot(x, y)
+            prediction = predict(model, point)
+            gradient = compute_gradient(point, prediction)
 
-    def _predict(self, model: List[float], point: Dict[str, Any]) -> float:
-        return predict(model, point)
+            for j in range(len(model)):
+                reg_term = reg_lambda * model[j]
+                model[j] -= learning_rate * (gradient[j] + reg_term)
 
-    def _compute_gradient(self, point: Dict[str, Any], prediction: float) -> List[float]:
-        return compute_gradient(point, prediction)
-
-    def _worker_function(self, batch_data: List[Dict[str, Any]],
-                         model: List[float],
-                         learning_rate: float,
-                         reg_lambda: float) -> List[float]:
-        local_model = model.copy()
-
-        for point in batch_data:
-            prediction = self._predict(local_model, point)
-
-            gradient = self._compute_gradient(point, prediction)
-
-            for j in range(len(local_model)):
-                reg_term = reg_lambda * local_model[j]
-                local_model[j] -= learning_rate * (gradient[j] + reg_term)
-
-        return local_model
-
-    def train(self, data: List[Dict[str, Any]],
-              epochs: int,
-              learning_rate: float,
-              reg_lambda: float) -> List[float]:
-        """
-        Train the model using distributed SGD
-
-        Args:
-            data: List of data points
-            epochs: Number of training epochs
-            learning_rate: Learning rate for SGD
-            reg_lambda: L2 regularization parameter
-
-        Returns:
-            Trained model weights
-        """
-        # Initialize model
-        model = self._initialize_model(len(data[0]['features']))
-
-        batch_size = len(data) // self.num_workers
-
-        for epoch in range(epochs):
-            random.shuffle(data)
-
-            batches = [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
-
-            iterdata = [(batch, model, learning_rate, reg_lambda)
-                        for batch in batches[:self.num_workers]]
-
-            futures = self.fexec.map(self._worker_function, iterdata)
-            results = self.fexec.get_result(futures)
-
-            # Average models from all workers
-            model = [sum(weights) / len(weights)
-                     for weights in zip(*results)]
-
-            # Optional: Print progress
-            if (epoch + 1) % 5 == 0:
-                print(f"Completed epoch {epoch + 1}/{epochs}")
-
-        self.fexec.clean()
         return model
 
+    except Exception as e:
+        print(f"Error in worker: {str(e)}")
+        raise
 
-def distributed_submission(data: List[Dict[str, Any]], num_workers: int = 4) -> List[float]:
-    """Submission function that uses distributed SGD"""
-    sgd = DistributedSGD(num_workers=num_workers)
-    return sgd.train(data, epochs=20, learning_rate=0.001, reg_lambda=0.001)
+class DistributedSGD:
+    def __init__(self, num_workers: int = 1):
+        config = {
+            'lithops': {
+                'runtime_memory': 3096,
+                'worker_processes': num_workers
+            },
+            'localhost': {
+                'runtime_memory': 3096
+            }
+        }
+        self.fexec = lithops.FunctionExecutor(backend='localhost', config=config)
+        self.num_workers = num_workers
+
+    def partition_data(self, data: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        random.shuffle(data)
+        batch_size = len(data) // self.num_workers
+        return [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
+
+    def train(self, data: List[Dict[str, Any]],
+              epochs: int = 5,
+              learning_rate: float = 0.001,
+              reg_lambda: float = 0.001) -> List[float]:
+        """
+        Train the model using distributed SGD.
+        Implements the main loop from the algorithm in the PDF.
+        """
+        print(f"\nInitializing training with {self.num_workers} workers")
+        model = initialize_model(len(data[0]['features']))
+        print(f"Total data points: {len(data)}")
+
+        start_time = time.time()
+        best_accuracy = 0
+        best_model = None
+
+        for epoch in range(epochs):
+            print(f"\nStarting epoch {epoch + 1}/{epochs}")
+            epoch_start_time = time.time()
+
+            partitioned_data = self.partition_data(data)
+
+            worker_data = [{
+                'data': {
+                    'batch': batch,
+                    'model': model,
+                    'learning_rate': learning_rate,
+                    'reg_lambda': reg_lambda
+                }
+            } for batch in partitioned_data]
+
+            try:
+                futures = self.fexec.map(process_batch, worker_data)
+                worker_models = self.fexec.get_result(futures)
+
+                model = [sum(w[j] for w in worker_models) / len(worker_models)
+                        for j in range(len(model))]
+
+                predictions = [predict(model, p) for p in data]
+                current_accuracy = sum(1 for p, pred in zip(data, predictions)
+                                    if (pred >= 0.5) == p['label']) / len(data)
+
+                if current_accuracy > best_accuracy:
+                    best_accuracy = current_accuracy
+                    best_model = model.copy()
+
+                epoch_time = time.time() - epoch_start_time
+                print(f"Epoch {epoch + 1} completed - Accuracy: {current_accuracy:.4f}")
+                print(f"Epoch time: {epoch_time:.2f}s")
+                print(f"Best accuracy so far: {best_accuracy:.4f}")
+
+            except Exception as e:
+                print(f"Error during training: {str(e)}")
+                raise
+
+        total_time = time.time() - start_time
+        print(f"\nTraining completed in {total_time:.2f}s")
+        print(f"Final best accuracy: {best_accuracy:.4f}")
+
+        self.fexec.clean()
+        return best_model if best_model is not None else model
